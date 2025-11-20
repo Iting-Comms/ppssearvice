@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Phone → MD5 / SHA256 Rednote Template Converter</title>
+  <!-- CryptoJS for MD5 & SHA256 -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.2.0/crypto-js.min.js"></script>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      max-width: 900px;
+      margin: 40px auto;
+      padding: 0 16px;
+      line-height: 1.5;
+    }
+    h1 {
+      font-size: 24px;
+      margin-bottom: 8px;
+    }
+    .layout {
+      display: flex;
+      gap: 24px;
+      flex-wrap: wrap;
+    }
+    .card {
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      padding: 16px 20px;
+      margin-top: 16px;
+      flex: 1 1 360px;
+      box-sizing: border-box;
+    }
+    label {
+      display: block;
+      margin-top: 12px;
+      font-weight: 600;
+    }
+    input[type="file"],
+    input[type="text"] {
+      margin-top: 6px;
+    }
+    input[type="text"] {
+      width: 100%;
+      max-width: 320px;
+      padding: 6px 8px;
+      border-radius: 4px;
+      border: 1px solid #ccc;
+    }
+    button {
+      margin-top: 20px;
+      padding: 8px 18px;
+      font-size: 15px;
+      border-radius: 6px;
+      border: 1px solid #444;
+      background: #111;
+      color: #fff;
+      cursor: pointer;
+    }
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .radio-group {
+      margin-top: 6px;
+    }
+    .radio-group label {
+      font-weight: 400;
+    }
+    .small {
+      font-size: 12px;
+      color: #666;
+    }
+    #message {
+      margin-top: 12px;
+      font-size: 14px;
+    }
+    #message.error {
+      color: #d32f2f;
+    }
+    #message.success {
+      color: #2e7d32;
+    }
+    pre {
+      background: #fafafa;
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-size: 12px;
+      overflow-x: auto;
+    }
+  </style>
+</head>
+<body>
+  <h1>Phone → MD5 / SHA256 Rednote Template Converter</h1>
+  <p class="small">
+    Upload a CSV file containing phone numbers (e.g. <code>phonenumber.csv</code>),<br />
+    and this tool will generate a new CSV in the official Rednote template format<br />
+    with hashed values in the first column (Chinese headers).
+    <br /><br />
+    All processing is done in your browser. No data is sent to any server.
+  </p>
+
+  <div class="layout">
+    <!-- Left: Input controls -->
+    <div class="card">
+      <label for="fileInput">1) Select phone number CSV</label>
+      <input id="fileInput" type="file" accept=".csv" />
+
+      <p class="small">
+        • The file should have a header row and one or more rows of phone numbers.<br />
+        • Example: column name <code>phone number</code> containing values like
+        <code>+86 15011613197</code>.<br />
+      </p>
+
+      <label for="columnName">2) Phone number column name (optional)</label>
+      <input
+        id="columnName"
+        type="text"
+        placeholder="e.g. phone number (leave empty to use the first column)"
+      />
+      <p class="small">
+        If you leave this blank, the first column in the CSV will be used as phone numbers.
+      </p>
+
+      <label>3) Hash algorithm</label>
+      <div class="radio-group">
+        <label><input type="radio" name="algo" value="md5" checked /> MD5 (手机号_MD5)</label><br />
+        <label><input type="radio" name="algo" value="sha256" /> SHA256 (手机号_SHA256)</label>
+      </div>
+
+      <button id="convertBtn">Convert & Download Rednote CSV</button>
+      <div id="message"></div>
+    </div>
+
+    <!-- Right: Rednote template preview -->
+    <div class="card">
+      <strong>Rednote template (output format)</strong>
+      <p class="small">
+        The generated CSV will use the following Chinese headers, compatible with Rednote's
+        audience upload template. Hashed phone numbers will be placed under
+        <code>用户ID（必填）</code>, other columns will be left empty.
+      </p>
+      <pre>用户ID（必填）,行为时间（选填）,行为类型（选填）,样本渠道（选填）,实付金额（选填）,标价金额（选填）,额外信息（选填）
+&lt;hashed_value_1&gt;,,,,,,
+&lt;hashed_value_2&gt;,,,,,,
+...</pre>
+      <p class="small">
+        The downloaded file name will look like:
+        <br />
+        • <code>phonenumber_rednote_md5.csv</code> or
+        <code>phonenumber_rednote_sha256.csv</code>
+      </p>
+    </div>
+  </div>
+
+  <script>
+    const fileInput = document.getElementById('fileInput');
+    const columnNameInput = document.getElementById('columnName');
+    const convertBtn = document.getElementById('convertBtn');
+    const messageEl = document.getElementById('message');
+
+    function showMessage(text, type = '') {
+      messageEl.textContent = text;
+      messageEl.className = '';
+      if (type) {
+        messageEl.classList.add(type);
+      }
+    }
+
+    function parseCSV(text) {
+      const lines = text
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter((l) => l.length > 0);
+
+      if (lines.length === 0) return { header: [], rows: [] };
+
+      const header = lines[0].split(',').map((h) => h.trim());
+      const rows = lines.slice(1).map((line) => line.split(','));
+      return { header, rows };
+    }
+
+    function hashValue(str, algo) {
+      if (!str) return '';
+      // remove spaces in phone number (e.g. "+86 15011613197" -> "+8615011613197")
+      const normalized = str.replace(/\s+/g, '');
+      if (algo === 'md5') {
+        return CryptoJS.MD5(normalized).toString();
+      } else if (algo === 'sha256') {
+        return CryptoJS.SHA256(normalized).toString();
+      }
+      return '';
+    }
+
+    function downloadCSV(filename, content) {
+      const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+
+    convertBtn.addEventListener('click', () => {
+      showMessage('');
+
+      const file = fileInput.files[0];
+      if (!file) {
+        showMessage('Please select a CSV file first.', 'error');
+        return;
+      }
+
+      const reader = new FileReader();
+      convertBtn.disabled = true;
+      showMessage('Reading file...', 'success');
+
+      reader.onload = (e) => {
+        try {
+          const text = e.target.result;
+          const { header, rows } = parseCSV(text);
+
+          if (header.length === 0) {
+            showMessage('Could not read CSV header. Please check the file format.', 'error');
+            convertBtn.disabled = false;
+            return;
+          }
+
+          let colIndex = 0;
+          const colName = columnNameInput.value.trim();
+          if (colName) {
+            colIndex = header.indexOf(colName);
+            if (colIndex === -1) {
+              showMessage(
+                `Column "${colName}" was not found. Actual columns: ${header.join(', ')}`,
+                'error'
+              );
+              convertBtn.disabled = false;
+              return;
+            }
+          }
+
+          const algo = document.querySelector('input[name="algo"]:checked').value;
+
+          // Rednote Chinese headers (fixed)
+          const templateHeader = [
+            '用户ID（必填）',
+            '行为时间（选填）',
+            '行为类型（选填）',
+            '样本渠道（选填）',
+            '实付金额（选填）',
+            '标价金额（选填）',
+            '额外信息（选填）'
+          ];
+
+          const outputLines = [];
+          outputLines.push(templateHeader.join(','));
+
+          let count = 0;
+          for (const row of rows) {
+            if (row.length <= colIndex) continue;
+            const phone = (row[colIndex] || '').trim();
+            if (!phone) continue;
+
+            const hashed = hashValue(phone, algo);
+            if (!hashed) continue;
+
+            // hashed value in first column, others empty
+            const outRow = [hashed, '', '', '', '', '', ''];
+            outputLines.push(outRow.join(','));
+            count += 1;
+          }
+
+          if (count === 0) {
+            showMessage(
+              'No valid phone numbers were found in the selected column. Please check your CSV.',
+              'error'
+            );
+            convertBtn.disabled = false;
+            return;
+          }
+
+          const csvContent = outputLines.join('\n');
+
+          const baseName = file.name.replace(/\.csv$/i, '');
+          const suffix = algo === 'md5' ? '_rednote_md5' : '_rednote_sha256';
+          const filename = `${baseName}${suffix}.csv`;
+
+          downloadCSV(filename, csvContent);
+          showMessage(`Done! Converted ${count} phone numbers.`, 'success');
+        } catch (err) {
+          console.error(err);
+          showMessage(
+            'An error occurred while processing the file. Please check the CSV format.',
+            'error'
+          );
+        } finally {
+          convertBtn.disabled = false;
+        }
+      };
+
+      reader.onerror = () => {
+        showMessage('Failed to read the file. Please try again.', 'error');
+        convertBtn.disabled = false;
+      };
+
+      reader.readAsText(file, 'utf-8');
+    });
+  </script>
+</body>
+</html>
